@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Ride Replay</title>
+<meta name="theme-color" content="#12171a">
+<meta name="description" content="Replay your bike rides on a 3D map.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap">
+<style>
+/* Layout: full-bleed 3D map on top, control deck below (readouts, profile, transport). Single dark look. */
+:root{
+  --bg:#12171a; --deck:#1a2126; --ink:#eef2ef; --muted:#9aa8a1; --line:#2c363b;
+  --ochre:#f0a040; --gum:#7fb79a; --elev:#2f4038; --elevline:#7fa08f; --speed:#f0a040;
+  --display:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;
+  --body:"Barlow",system-ui,-apple-system,"Segoe UI",sans-serif;
+  color-scheme:dark;
+}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.4 var(--body);display:flex;flex-direction:column;
+  padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);box-sizing:border-box}
+#map{flex:1 1 auto;min-height:260px;position:relative}
+.top{position:absolute;z-index:2;left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px));top:12px;display:flex;justify-content:space-between;align-items:flex-start;gap:8px;pointer-events:none}
+.title{background:rgba(18,23,26,.78);border:1px solid var(--line);border-radius:10px;padding:6px 12px;pointer-events:auto;min-width:0}
+.title h1{font:700 22px/1.1 var(--display);margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.title div{font-size:12px;color:var(--muted)}
+.tools{display:grid;gap:6px;pointer-events:auto}
+.tools button,.tools label{font:600 13px var(--body);background:rgba(18,23,26,.85);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:7px 10px;cursor:pointer;text-align:center}
+.tools button[aria-pressed="true"]{background:var(--ochre);color:#1a1208;border-color:var(--ochre)}
+.rider{width:18px;height:18px;border-radius:50%;background:var(--ochre);border:3px solid #fff;box-shadow:0 0 0 2px rgba(0,0,0,.35),0 2px 8px rgba(0,0,0,.5)}
+.deck{background:var(--deck);border-top:1px solid var(--line);padding-block:10px 12px;padding-left:max(14px,env(safe-area-inset-left,0px));padding-right:max(14px,env(safe-area-inset-right,0px));display:grid;gap:8px}
+.read{display:grid;grid-template-columns:1.25fr 1.1fr 1fr 1fr;gap:6px}
+.read div{display:grid}
+.read span{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.read b{font:600 22px/1.1 var(--display);font-variant-numeric:tabular-nums;white-space:nowrap}
+#prof{width:100%;height:84px;display:block;touch-action:none;cursor:pointer}
+.tr{display:flex;align-items:center;gap:10px}
+#play{width:48px;height:48px;border-radius:50%;border:0;background:var(--ochre);color:#1a1208;display:grid;place-items:center;flex:none;cursor:pointer}
+#play svg{width:20px;height:20px;fill:currentColor}
+.sc{flex:1;min-width:0;display:grid;gap:2px}
+#scrub{width:100%;accent-color:var(--ochre)}
+.times{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.rates{display:flex;gap:6px;flex-wrap:wrap}
+.chip{font:600 13px var(--body);background:transparent;color:var(--ink);border:1px solid var(--line);border-radius:999px;padding:5px 10px;cursor:pointer}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.sum{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.nomap{position:absolute;z-index:1;left:16px;right:16px;top:50%;transform:translateY(-50%);background:rgba(18,23,26,.92);border:1px solid var(--ochre);border-radius:10px;padding:14px 16px;font-size:14px;line-height:1.45;text-align:center}
+.err{position:absolute;z-index:3;left:12px;right:12px;bottom:12px;background:#5a1f1a;color:#fff;border-radius:8px;padding:8px 12px;font-size:13px}
+button:focus-visible,label:focus-visible,input:focus-visible{outline:2px solid var(--ochre);outline-offset:2px}
+@media (max-width:420px){.read b{font-size:18px}.rates .chip{padding:5px 8px}}
+.maplibregl-ctrl-attrib{font-size:10px}
+.sheet{position:absolute;z-index:5;inset:0;background:rgba(10,13,15,.6);display:flex;align-items:flex-end}
+.sheet[hidden]{display:none}
+.panel{background:var(--deck);width:100%;max-height:85%;border-radius:16px 16px 0 0;border-top:1px solid var(--line);display:flex;flex-direction:column;padding-bottom:env(safe-area-inset-bottom,0px)}
+.phead{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px 8px}
+.phead h2{font:700 24px/1 var(--display);margin:0}
+.btn{font:600 14px var(--body);border-radius:10px;padding:10px 14px;border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer;display:inline-block;text-align:center}
+.btn.primary{background:var(--ochre);border-color:var(--ochre);color:#1a1208}
+.list{overflow:auto;padding:0 8px 12px;margin:0;list-style:none}
+.list li{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line)}
+.list li:last-child{border-bottom:0}
+.list .open{flex:1;min-width:0;text-align:left;background:none;border:0;color:var(--ink);padding:12px 8px;cursor:pointer;font:inherit}
+.list .open b{display:block;font:600 18px/1.2 var(--display);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.list .open span{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.list li.cur .open b{color:var(--ochre)}
+.list .del{background:none;border:0;color:var(--muted);padding:12px;cursor:pointer;font-size:13px}
+.hint{font-size:13px;color:var(--muted);padding:0 16px 14px;margin:0}
+.empty{position:absolute;z-index:3;left:16px;right:16px;top:50%;transform:translateY(-50%);background:rgba(18,23,26,.94);border:1px solid var(--line);border-radius:14px;padding:18px;text-align:center;display:grid;gap:10px}
+.empty[hidden]{display:none}
+.empty h2{font:700 26px/1.1 var(--display);margin:0}
+.empty p{margin:0;color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+<div id="map">
+  <div class="top">
+    <div class="title"><h1 id="name">Ride</h1><div id="when"></div></div>
+    <div class="tools">
+      <button id="chase" aria-pressed="true">Chase cam</button>
+      <button id="dim" aria-pressed="true">3D</button>
+      <button id="base">Streets</button>
+      <button id="overview">Overview</button>
+      <button id="libBtn">Rides</button>
+    </div>
+  </div>
+  <div id="err" class="err" hidden></div>
+  <div id="nomap" class="nomap" hidden><b>Can't reach the map right now.</b><br>Check your internet connection. Playback below still works.</div>
+  <div id="empty" class="empty" hidden>
+    <h2>Add your first ride</h2>
+    <p>In Bosch Flow, export a ride as GPX and share it to Ride Replay — or save it to your phone and add it here.</p>
+    <label class="btn primary" for="file">Add GPX file</label>
+  </div>
+  <div id="sheet" class="sheet" hidden>
+    <div class="panel" role="dialog" aria-labelledby="libTitle">
+      <div class="phead"><h2 id="libTitle">Your rides</h2><div><label class="btn primary" for="file">Add GPX</label> <button class="btn" id="libClose">Close</button></div></div>
+      <ul class="list" id="list"></ul>
+      <p class="hint">Rides are kept on this phone only.</p>
+    </div>
+  </div>
+  <input id="file" type="file" accept=".gpx,application/gpx+xml,application/xml,text/xml,application/octet-stream" multiple hidden>
+</div>
+<div class="deck">
+  <div class="read">
+    <div><span>Clock</span><b id="rClock">–</b></div>
+    <div><span>Speed</span><b id="rSpeed">–</b></div>
+    <div><span>Elevation</span><b id="rEle">–</b></div>
+    <div><span>Covered</span><b id="rDist">–</b></div>
+  </div>
+  <canvas id="prof" aria-label="Elevation and speed profile. Tap to jump."></canvas>
+  <div class="tr">
+    <button id="play" aria-label="Play"><svg viewBox="0 0 24 24" id="playIcon"><path d="M7 4.5v15l13-7.5z"/></svg></button>
+    <div class="sc">
+      <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Ride position">
+      <div class="times"><span id="tNow">0:00</span><span class="sum" id="sum"></span><span id="tEnd">0:00</span></div>
+    </div>
+  </div>
+  <div class="rates" role="group" aria-label="Playback speed">
+    <button class="chip" data-r="10">10×</button>
+    <button class="chip" data-r="30" aria-pressed="true">30×</button>
+    <button class="chip" data-r="60">60×</button>
+    <button class="chip" data-r="120">120×</button>
+    <button class="chip" data-r="300">300×</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script>
+const NOMAP = typeof maplibregl==="undefined";
+if(NOMAP){window.maplibregl={Map:class{constructor(o){this.c=document.getElementById(o.container);this.h={};this.s={};setTimeout(()=>(this.h.load||[]).forEach(f=>f()),0);}
+on(e,f){(this.h[e]=this.h[e]||[]).push(f)}getContainer(){return this.c}getCanvasContainer(){return this.c}project(l){return {x:NaN,y:NaN}}getZoom(){return 15}getSource(id){return this.s[id]}addSource(id){this.s[id]={setData(){}}}addLayer(){}
+setTerrain(){}jumpTo(){}easeTo(){}fitBounds(){}getLayoutProperty(){return "visible"}setLayoutProperty(){}},
+Marker:class{setLngLat(){return this}addTo(){return this}}};}
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function showErr(m){$("err").textContent=m;$("err").hidden=false;clearTimeout(showErr.t);showErr.t=setTimeout(()=>$("err").hidden=true,8000);}
+
+/* ---------- ride processing ---------- */
+const R=6371000,rad=d=>d*Math.PI/180;
+function hav(la1,lo1,la2,lo2){const a=Math.sin(rad(la2-la1)/2)**2+Math.cos(rad(la1))*Math.cos(rad(la2))*Math.sin(rad(lo2-lo1)/2)**2;return 2*R*Math.asin(Math.sqrt(a));}
+function median(a){const s=[...a].sort((x,y)=>x-y);return s[s.length>>1];}
+function process(p){
+  const n=p.length;if(n<2)throw new Error("That file has fewer than two timed track points.");
+  const lat=new Float64Array(n),lon=new Float64Array(n),t=new Float64Array(n),d=new Float64Array(n),er=new Float64Array(n);
+  for(let i=0;i<n;i++){lat[i]=p[i][0];lon[i]=p[i][1];t[i]=p[i][3]-p[0][3];er[i]=isFinite(p[i][2])?p[i][2]:(i?er[i-1]:0);if(i)d[i]=d[i-1]+hav(lat[i-1],lon[i-1],lat[i],lon[i]);}
+  const em=new Float64Array(n),e=new Float64Array(n),W=25;
+  for(let i=0;i<n;i++)em[i]=median(Array.prototype.slice.call(er,Math.max(0,i-W),Math.min(n,i+W+1)));
+  for(let i=0;i<n;i++){let s=0,c=0;for(let j=Math.max(0,i-10);j<Math.min(n,i+11);j++){s+=em[j];c++;}e[i]=s/c;}
+  const v=new Float64Array(n);let a=0,b=0;
+  for(let i=0;i<n;i++){while(t[a]<t[i]-4)a++;if(b<i)b=i;while(b<n-1&&t[b+1]<=t[i]+4)b++;const dt=t[b]-t[a];v[i]=dt>0?(d[b]-d[a])/dt*3.6:0;}
+  let moving=0;for(let i=1;i<n;i++){const dt=t[i]-t[i-1],sp=dt>0?(d[i]-d[i-1])/dt*3.6:0;if(dt<15&&sp>2.5)moving+=dt;}
+  let asc=0,ref=e[0];for(let i=1;i<n;i++){if(e[i]>ref+2){asc+=e[i]-ref;ref=e[i];}else if(e[i]<ref-2)ref=e[i];}
+  let vmax=0,e0=1e9,e1=-1e9,b0=[1e9,1e9],b1=[-1e9,-1e9];
+  for(let i=0;i<n;i++){vmax=Math.max(vmax,v[i]);e0=Math.min(e0,e[i]);e1=Math.max(e1,e[i]);b0=[Math.min(b0[0],lon[i]),Math.min(b0[1],lat[i])];b1=[Math.max(b1[0],lon[i]),Math.max(b1[1],lat[i])];}
+  return {n,lat,lon,t,d,e,v,moving,asc,vmax,e0,e1,bounds:[b0,b1],dist:d[n-1],dur:t[n-1],startMs:p[0][4]};
+}
+function parseGPX(text){
+  const doc=new DOMParser().parseFromString(text,"application/xml");
+  if(doc.querySelector("parsererror"))throw new Error("That file isn't valid GPX. Export the ride again as GPX and retry.");
+  const nm=((doc.querySelector("trk > name")||doc.querySelector("metadata > name")||{}).textContent||"Imported ride").trim();
+  const pts=[...doc.getElementsByTagName("trkpt")].map(el=>{const tm=el.getElementsByTagName("time")[0],ev=el.getElementsByTagName("ele")[0],ms=tm?Date.parse(tm.textContent):NaN;
+    return [+el.getAttribute("lat"),+el.getAttribute("lon"),ev?+ev.textContent:NaN,ms/1000,ms];}).filter(q=>isFinite(q[3])&&isFinite(q[0]));
+  if(pts.length<2)throw new Error("No timed track points found. Playback needs a recorded ride, not a planned route.");
+  return {name:nm,pts};
+}
+const fmtDur=s=>{s=Math.max(0,Math.round(s));const h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;return h?`${h}:${String(m).padStart(2,"0")}:${String(x).padStart(2,"0")}`:`${m}:${String(x).padStart(2,"0")}`;};
+
+/* ---------- map ---------- */
+const map=new maplibregl.Map({
+  container:"map",
+  style:{version:8,
+    sources:{
+      sat:{type:"raster",tiles:["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],tileSize:256,maxzoom:19,attribution:"Imagery © Esri, Maxar, Earthstar Geographics"},
+      streets:{type:"raster",tiles:["a","b","c"].map(s=>`https://${s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}@2x.png`),tileSize:256,maxzoom:20,attribution:"© OpenStreetMap contributors © CARTO"},
+      dem:{type:"raster-dem",tiles:["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],tileSize:256,maxzoom:14,encoding:"terrarium",attribution:"Terrain: Mapzen, AWS Open Data"}
+    },
+    layers:[
+      {id:"bg",type:"background",paint:{"background-color":"#1d2428"}},
+      {id:"sat",type:"raster",source:"sat"},
+      {id:"streets",type:"raster",source:"streets",layout:{visibility:"none"}}
+    ]},
+  center:[116.12,-31.97],zoom:12,pitch:0,maxPitch:80,attributionControl:{compact:true}
+});
+map.on("error",e=>{if(e&&e.error&&/Failed to fetch|NetworkError|load/i.test(String(e.error.message||"")))showErr("Some map tiles didn't load. Check your internet connection.");});
+
+let ride,name,cur=0,playing=false,rate=30,last=0,chase=true,threeD=true,bearing=0,lastIdx=-1,lastPush=0;
+const riderEl=document.createElement("div");riderEl.className="rider";
+const rider=new maplibregl.Marker({element:riderEl});
+
+function routeCoords(upto){const out=[],step=Math.max(1,Math.floor(ride.n/4000));for(let i=0;i<=upto;i+=step)out.push([ride.lon[i],ride.lat[i]]);return out;}
+
+/* Route drawn on a canvas over the map, projected through the 3D terrain each frame.
+   Avoids relying on the map's GeoJSON worker pipeline, which didn't render on Jim's phone. */
+let ov,octx,routeIdx=[];
+function initOverlay(){
+  if(ov)return;ov=document.createElement("canvas");ov.style.cssText="position:absolute;left:0;top:0;pointer-events:none;z-index:1";
+  map.getCanvasContainer().appendChild(ov);octx=ov.getContext("2d");sizeOverlay();
+  map.on("render",drawRoute);map.on("resize",()=>{sizeOverlay();drawRoute();});
+}
+function sizeOverlay(){const c=map.getContainer(),d=devicePixelRatio||1;ov.width=c.clientWidth*d;ov.height=c.clientHeight*d;ov.style.width=c.clientWidth+"px";ov.style.height=c.clientHeight+"px";ov._d=d;}
+function addRideLayers(){
+  routeIdx=[];const step=Math.max(1,Math.floor(ride.n/3000));for(let i=0;i<ride.n;i+=step)routeIdx.push(i);if(routeIdx[routeIdx.length-1]!==ride.n-1)routeIdx.push(ride.n-1);
+  initOverlay();drawRoute();
+}
+function drawRoute(){
+  if(!ride||!octx)return;const d=ov._d,W=ov.width/d,H=ov.height/d,c=octx;
+  c.setTransform(d,0,0,d,0,0);c.clearRect(0,0,W,H);
+  const P=routeIdx.map(i=>map.project([ride.lon[i],ride.lat[i]]));
+  const ok=p=>p&&isFinite(p.x)&&isFinite(p.y)&&p.x>-W&&p.x<2*W&&p.y>-H&&p.y<2*H;
+  const s=sample(cur);let k=0;while(k<routeIdx.length&&routeIdx[k]<=s.i)k++;
+  const here=map.project([s.lon,s.lat]);
+  function path(from,to,extra){c.beginPath();let pen=false;for(let j=from;j<to;j++){const p=P[j];if(!ok(p)){pen=false;continue;}pen?c.lineTo(p.x,p.y):c.moveTo(p.x,p.y);pen=true;}
+    if(extra&&ok(extra)){pen?c.lineTo(extra.x,extra.y):c.moveTo(extra.x,extra.y);}}
+  const z=map.getZoom(),w=Math.max(2,Math.min(6,(z-10)));
+  c.lineCap="round";c.lineJoin="round";
+  path(0,P.length);c.strokeStyle="rgba(0,0,0,.55)";c.lineWidth=w+3;c.stroke();c.strokeStyle="rgba(255,255,255,.95)";c.lineWidth=w;c.stroke();
+  path(0,k,here);c.strokeStyle="#3a1f05";c.lineWidth=w+4;c.stroke();c.strokeStyle="#f0a040";c.lineWidth=w+1.5;c.stroke();
+}
+
+function setTerrain(on){threeD=on;$("dim").setAttribute("aria-pressed",on);$("dim").textContent=on?"3D":"2D";
+  if(on)map.setTerrain({source:"dem",exaggeration:1.5});else map.setTerrain(null);
+  if(!chase)map.easeTo({pitch:on?55:0,duration:600});}
+
+/* ---------- sampling ---------- */
+function idxAt(tt){const t=ride.t;let lo=0,hi=ride.n-1;while(lo<hi){const m=(lo+hi+1)>>1;if(t[m]<=tt)lo=m;else hi=m-1;}return lo;}
+function sample(tt){const i=idxAt(tt),j=Math.min(i+1,ride.n-1),sp=ride.t[j]-ride.t[i],k=sp>0?(tt-ride.t[i])/sp:0,L=A=>A[i]+(A[j]-A[i])*k;
+  return {i,lat:L(ride.lat),lon:L(ride.lon),e:L(ride.e),v:L(ride.v),d:L(ride.d)};}
+function pointAtDist(dd){let lo=0,hi=ride.n-1;while(lo<hi){const m=(lo+hi)>>1;if(ride.d[m]<dd)lo=m+1;else hi=m;}return lo;}
+function bearingTo(la1,lo1,la2,lo2){const y=Math.sin(rad(lo2-lo1))*Math.cos(rad(la2)),x=Math.cos(rad(la1))*Math.sin(rad(la2))-Math.sin(rad(la1))*Math.cos(rad(la2))*Math.cos(rad(lo2-lo1));return (Math.atan2(y,x)*180/Math.PI+360)%360;}
+
+/* ---------- frame ---------- */
+function update(force){
+  if(!ride)return;const s=sample(cur);
+  rider.setLngLat([s.lon,s.lat]);
+  const now=performance.now();
+  if(NOMAP||!chase)drawRoute();
+  if(chase){
+    const a=pointAtDist(s.d+120),target=a>s.i?bearingTo(s.lat,s.lon,ride.lat[a],ride.lon[a]):bearing;
+    let diff=((target-bearing+540)%360)-180;bearing=(bearing+diff*(force?1:0.06)+360)%360;
+    const h=map.getContainer().clientHeight;
+    map.jumpTo({center:[s.lon,s.lat],bearing,pitch:threeD?62:0,zoom:threeD?15.6:15.2,padding:{top:h*0.3,bottom:0,left:0,right:0}});
+  }
+  const clock=ride.startMs?new Date(ride.startMs+cur*1000).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit",second:"2-digit",hour12:false}):fmtDur(cur);
+  $("rClock").textContent=clock;$("rSpeed").textContent=s.v.toFixed(1)+" km/h";$("rEle").textContent=Math.round(s.e)+" m";$("rDist").textContent=(s.d/1000).toFixed(2)+" km";
+  $("tNow").textContent=fmtDur(cur);$("scrub").value=Math.round(cur/ride.dur*1000);
+  drawProf(s);
+}
+
+/* ---------- profile ---------- */
+const prof=$("prof"),pctx=prof.getContext("2d");
+function sizeProf(){const dpr=devicePixelRatio||1,r=prof.getBoundingClientRect();prof.width=r.width*dpr;prof.height=r.height*dpr;prof._d=dpr;prof._w=r.width;prof._h=r.height;}
+function drawProf(s){
+  const c=pctx,W=prof._w,H=prof._h,l=30,r=30,top=6,bot=16;c.setTransform(prof._d,0,0,prof._d,0,0);c.clearRect(0,0,W,H);
+  const pw=W-l-r,ph=H-top-bot,n=ride.n,eLo=Math.floor((ride.e0-5)/10)*10,eHi=Math.ceil((ride.e1+5)/10)*10,vHi=Math.ceil(ride.vmax/10)*10||10;
+  const px=d=>l+d/ride.dist*pw,pe=e=>top+ph-(e-eLo)/(eHi-eLo)*ph,pv=v=>top+ph-v/vHi*ph;
+  c.font="10px "+css("--body").split(",")[0];c.textBaseline="middle";c.strokeStyle=css("--line");c.lineWidth=1;
+  for(let k=0;k<=2;k++){const yy=top+ph*k/2;c.beginPath();c.moveTo(l,yy);c.lineTo(W-r,yy);c.stroke();
+    c.fillStyle=css("--elevline");c.textAlign="right";c.fillText(Math.round(eHi-(eHi-eLo)*k/2)+"m",l-4,yy);
+    c.fillStyle=css("--speed");c.textAlign="left";c.fillText(Math.round(vHi-vHi*k/2),W-r+4,yy);}
+  c.fillStyle=css("--muted");c.textAlign="center";c.textBaseline="top";
+  const km=ride.dist/1000,ks=km>40?10:km>15?5:km>6?2:1;for(let k=0;k<=km;k+=ks)c.fillText(k+" km",px(k*1000),H-bot+3);
+  const st=Math.max(1,Math.floor(n/(pw*1.5)));
+  c.beginPath();c.moveTo(px(0),top+ph);for(let i=0;i<n;i+=st)c.lineTo(px(ride.d[i]),pe(ride.e[i]));c.lineTo(px(ride.dist),top+ph);c.closePath();c.fillStyle=css("--elev");c.fill();
+  c.beginPath();for(let i=0;i<n;i+=st){const X=px(ride.d[i]),Y=pe(ride.e[i]);i?c.lineTo(X,Y):c.moveTo(X,Y);}c.strokeStyle=css("--elevline");c.lineWidth=1.4;c.stroke();
+  c.beginPath();for(let i=0;i<n;i+=st){const X=px(ride.d[i]),Y=pv(ride.v[i]);i?c.lineTo(X,Y):c.moveTo(X,Y);}c.strokeStyle=css("--speed");c.globalAlpha=.8;c.lineWidth=1;c.stroke();c.globalAlpha=1;
+  const cx=px(s.d);c.strokeStyle=css("--ink");c.lineWidth=1.5;c.beginPath();c.moveTo(cx,top);c.lineTo(cx,top+ph);c.stroke();
+  c.fillStyle=css("--ochre");c.beginPath();c.arc(cx,pe(s.e),4,0,7);c.fill();prof._l=l;prof._pw=pw;
+}
+function profSeek(e){const r=prof.getBoundingClientRect(),f=Math.min(1,Math.max(0,(e.clientX-r.left-prof._l)/prof._pw));cur=ride.t[pointAtDist(f*ride.dist)];update(true);}
+prof.addEventListener("pointerdown",e=>{if(!ride)return;prof.setPointerCapture(e.pointerId);profSeek(e);prof.onpointermove=profSeek;});
+prof.addEventListener("pointerup",()=>prof.onpointermove=null);
+
+/* ---------- playback ---------- */
+function setPlay(p){playing=p;$("play").setAttribute("aria-label",p?"Pause":"Play");
+  $("playIcon").innerHTML=p?'<path d="M6 4.5h4v15H6zM14 4.5h4v15h-4z"/>':'<path d="M7 4.5v15l13-7.5z"/>';
+  if(p){if(cur>=ride.dur)cur=0;last=performance.now();requestAnimationFrame(tick);}}
+function tick(now){if(!playing)return;cur+=Math.min(0.25,(now-last)/1000)*rate;last=now;if(cur>=ride.dur){cur=ride.dur;setPlay(false);}update();if(playing)requestAnimationFrame(tick);}
+$("play").onclick=()=>{if(ride)setPlay(!playing);};
+$("scrub").oninput=e=>{if(!ride)return;cur=e.target.value/1000*ride.dur;update(true);};
+document.querySelectorAll(".chip").forEach(b=>b.onclick=()=>{rate=+b.dataset.r;document.querySelectorAll(".chip").forEach(x=>x.setAttribute("aria-pressed",x===b));});
+
+function setChase(on){chase=on;$("chase").setAttribute("aria-pressed",on);if(on)update(true);}
+$("chase").onclick=()=>setChase(!chase);
+$("dim").onclick=()=>{setTerrain(!threeD);update(true);};
+$("overview").onclick=()=>{if(!ride)return;setChase(false);map.fitBounds(ride.bounds,{padding:50,pitch:threeD?50:0,bearing:0,duration:900});};
+$("base").onclick=()=>{const sat=map.getLayoutProperty("sat","visibility")!=="none";
+  map.setLayoutProperty("sat","visibility",sat?"none":"visible");map.setLayoutProperty("streets","visibility",sat?"visible":"none");$("base").textContent=sat?"Satellite":"Streets";};
+map.on("dragstart",e=>{if(e.originalEvent&&chase)setChase(false);});
+map.on("rotatestart",e=>{if(e.originalEvent&&chase)setChase(false);});
+
+/* ---------- ride library (IndexedDB, on this phone only) ---------- */
+const DB={db:null,
+  open(){return this.db||(this.db=new Promise((ok,no)=>{const r=indexedDB.open("ride-replay",1);r.onupgradeneeded=()=>r.result.createObjectStore("rides",{keyPath:"id"});r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error);}));},
+  async tx(mode,fn){const db=await this.open();return new Promise((ok,no)=>{const tx=db.transaction("rides",mode),st=tx.objectStore("rides"),r=fn(st);tx.oncomplete=()=>ok(r&&r.result);tx.onerror=()=>no(tx.error);});},
+  all(){return this.tx("readonly",s=>s.getAll());},get(id){return this.tx("readonly",s=>s.get(id));},
+  put(v){return this.tx("readwrite",s=>s.put(v));},del(id){return this.tx("readwrite",s=>s.delete(id));}};
+let curId=null;
+async function addGPXText(text,fallbackName){
+  const g=parseGPX(text),p=g.pts,s=process(p);
+  const rec={id:p[0][4]+"-"+p.length,name:g.name||fallbackName,startMs:p[0][4],dist:s.dist,dur:s.dur,asc:s.asc,
+    p:p.map(q=>[+q[0].toFixed(6),+q[1].toFixed(6),isFinite(q[2])?+q[2].toFixed(1):null,+(q[3]-p[0][3]).toFixed(1)])};
+  await DB.put(rec);return rec;
+}
+function openRec(rec){curId=rec.id;$("empty").hidden=true;
+  load(rec.name,rec.p.map(q=>[q[0],q[1],q[2]==null?NaN:q[2],q[3],rec.startMs+q[3]*1000]));
+  try{localStorage.setItem("rr-last",rec.id);}catch(e){}}
+async function addFiles(files){
+  let lastRec=null,bad=0;
+  for(const f of files){try{lastRec=await addGPXText(await f.text(),f.name.replace(/\.gpx$/i,""));}catch(err){bad++;showErr(err.message);}}
+  if(lastRec){openRec(lastRec);$("sheet").hidden=true;}
+  return bad;
+}
+$("file").onchange=async e=>{const fs=[...e.target.files];e.target.value="";if(fs.length)await addFiles(fs);};
+const fmtDate=ms=>new Date(ms).toLocaleDateString(undefined,{weekday:"short",day:"numeric",month:"short",year:"numeric"});
+async function renderList(){
+  const rides=(await DB.all()).sort((a,b)=>b.startMs-a.startMs),ul=$("list");ul.innerHTML="";
+  if(!rides.length){ul.innerHTML='<li><span class="open"><span>No rides yet. Tap Add GPX.</span></span></li>';return rides;}
+  for(const r of rides){const li=document.createElement("li");if(r.id===curId)li.className="cur";
+    const o=document.createElement("button");o.className="open";
+    o.innerHTML=`<b></b><span>${fmtDate(r.startMs)} · ${(r.dist/1000).toFixed(1)} km · ${fmtDur(r.dur)} · ${Math.round(r.asc)} m up</span>`;o.querySelector("b").textContent=r.name;
+    o.onclick=async()=>{openRec(await DB.get(r.id));$("sheet").hidden=true;};
+    const d=document.createElement("button");d.className="del";d.textContent="Delete";d.setAttribute("aria-label","Delete "+r.name);
+    d.onclick=async()=>{if(d.dataset.sure){await DB.del(r.id);if(r.id===curId)curId=null;renderList();}else{d.dataset.sure=1;d.textContent="Sure?";d.style.color="#ff8a7a";setTimeout(()=>{delete d.dataset.sure;d.textContent="Delete";d.style.color="";},3000);}};
+    li.append(o,d);ul.append(li);}
+  return rides;
+}
+$("libBtn").onclick=async()=>{await renderList();$("sheet").hidden=false;};
+$("libClose").onclick=()=>$("sheet").hidden=true;
+$("sheet").onclick=e=>{if(e.target===$("sheet"))$("sheet").hidden=true;};
+
+/* Files shared into the app from Bosch Flow (Android share sheet) arrive via the service worker. */
+async function takeShared(){
+  if(!("caches" in window))return false;
+  try{const c=await caches.open("rr-shared"),keys=await c.keys();if(!keys.length)return false;
+    const files=[];for(const k of keys){const r=await c.match(k);files.push(new File([await r.blob()],decodeURIComponent(k.url.split("/").pop())));await c.delete(k);}
+    await addFiles(files);return true;}catch(e){showErr("Couldn't read the shared ride: "+e.message);return false;}
+}
+async function startup(){
+  if(await takeShared()){history.replaceState(null,"",location.pathname);return;}
+  const rides=await DB.all();
+  if(!rides.length){$("empty").hidden=false;return;}
+  let last=null;try{last=localStorage.getItem("rr-last");}catch(e){}
+  openRec(rides.find(r=>r.id===last)||rides.sort((a,b)=>b.startMs-a.startMs)[0]);
+}
+
+function load(nm,pts){
+  ride=process(pts);name=nm;cur=0;setPlay(false);lastIdx=-1;
+  $("name").textContent=nm;
+  const st=ride.startMs?new Date(ride.startMs):null;
+  $("when").textContent=st?st.toLocaleDateString(undefined,{weekday:"short",day:"numeric",month:"short",year:"numeric"}):"";
+  $("tEnd").textContent=fmtDur(ride.dur);
+  $("sum").textContent=`${(ride.dist/1000).toFixed(1)} km · ${Math.round(ride.asc)} m up · top ${ride.vmax.toFixed(0)} km/h`;
+  addRideLayers();
+  const s1=pointAtDist(120);bearing=bearingTo(ride.lat[0],ride.lon[0],ride.lat[s1],ride.lon[s1]);
+  rider.setLngLat([ride.lon[0],ride.lat[0]]).addTo(map);
+  sizeProf();update(true);
+}
+
+window.addEventListener("resize",()=>{if(ride){sizeProf();update(true);}});
+if(NOMAP)$("nomap").hidden=false;
+/* Keep the map credits collapsed to the small (i) button; tap it to show them. */
+function collapseCredits(){const a=document.querySelector(".maplibregl-ctrl-attrib");if(a)a.classList.remove("maplibregl-compact-show");}
+map.on("load",()=>{setTimeout(collapseCredits,0);if(map.once)map.once("idle",collapseCredits);
+  setTerrain(true);
+  startup().catch(e=>showErr(e.message));
+});
+if("serviceWorker" in navigator)navigator.serviceWorker.register("sw.js").catch(()=>{});
+</script>
+</body>
+</html>
